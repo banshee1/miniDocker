@@ -25,7 +25,7 @@ func newWorkSpace(containerName, imageName, volume string) (string, error) {
 	}
 
 	// 创建aufs读写层branch
-	if err = createWriteLayer(containerName); err != nil {
+	if err = createOverlay2Layers(containerName); err != nil {
 		return "", err
 	}
 
@@ -44,10 +44,17 @@ func newWorkSpace(containerName, imageName, volume string) (string, error) {
 }
 
 // 创建容器读写层
-func createWriteLayer(containerName string) error {
+func createOverlay2Layers(containerName string) error {
+	// rwdir
 	writeURL := getRwLayerPath(containerName)
 	if err := os.Mkdir(writeURL, 0777); err != nil {
-		return fmt.Errorf("makdir dir %s error. %v", writeURL, err)
+		return fmt.Errorf("mkdir dir %s error. %v", writeURL, err)
+	}
+
+	// workdir
+	workPath := getWorkDirPath(containerName)
+	if err := os.Mkdir(workPath, 0777); err != nil {
+		return fmt.Errorf("mkdir dir %s error: $v", workPath, err)
 	}
 
 	return nil
@@ -62,8 +69,8 @@ func createMountPoint(containerName, imagePath string) (string, error) {
 	}
 
 	// 挂载unionFs
-	dirs := getContainerMountParam(getRwLayerPath(containerName), imagePath)
-	cmd := exec.Command("mount", "-t", "aufs", "-o", dirs, "none", mntPath)
+	dirs := getContainerMountParam(containerName, imagePath)
+	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", dirs, mntPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -101,8 +108,8 @@ func doMountVolumeOpr(mntPath string, volumeUrls []string) error {
 	}
 
 	// 利用aufs进行挂载
-	dirParam := fmt.Sprintf("dirs=%s", volumeUrls[0])
-	cmd := exec.Command("mount", "-t", "aufs", "-o", dirParam, "none", containerPath)
+	dirParam := fmt.Sprintf("upperdir=%s", volumeUrls[0])
+	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", dirParam, containerPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -120,6 +127,7 @@ func doMountVolumeOpr(mntPath string, volumeUrls []string) error {
 func DeleteWorkSpace(containerName, volume string) error {
 	// 清楚用户挂载volume
 	mntPath := getMntPointPath(containerName)
+	// 需要先取消用户挂载目录, 再取消根目录挂载
 	if err := deleteUserVolume(mntPath, volume); err != nil {
 		return err
 	}
@@ -129,9 +137,13 @@ func DeleteWorkSpace(containerName, volume string) error {
 		return err
 	}
 
-	// 删除容器文件系统挂载点
-	if err := deleteWriteLayer(getRwLayerPath(containerName)); err != nil {
-		return err
+	// 删除相关挂载目录
+	delDirs := []string{getRwLayerPath(containerName), getWorkDirPath(containerName), getMntPointPath(containerName)}
+	for _, dir := range delDirs {
+		// 删除容器文件系统挂载点
+		if err := rmDirAll(dir); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -158,6 +170,7 @@ func deleteUserVolume(mntUrl, volume string) error {
 	return nil
 }
 
+// 取消容器挂载视图
 func deleteMountPoint(mntUrl string) error {
 	cmd := exec.Command("umount", mntUrl)
 	cmd.Stdout = os.Stdout
@@ -165,14 +178,11 @@ func deleteMountPoint(mntUrl string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%v", err)
 	}
-	if err := os.RemoveAll(mntUrl); err != nil {
-		return fmt.Errorf("remove dir %s error %v", mntUrl, err)
-	}
 
 	return nil
 }
 
-func deleteWriteLayer(rwLayerPath string) error {
+func rmDirAll(rwLayerPath string) error {
 	if err := os.RemoveAll(rwLayerPath); err != nil {
 		return fmt.Errorf("remove dir %s error %v", rwLayerPath, err)
 	}
@@ -194,14 +204,22 @@ func getRwLayerPath(containerIdent string) string {
 	return path.Join(config.PathReadWrite, containerIdent)
 }
 
+// 获取overlay2 workdir路径
+func getWorkDirPath(containerIdent string) string {
+	return path.Join(config.PathWorkDir, containerIdent)
+}
+
 // 获取container挂载点路径
 func getMntPointPath(containerIdent string) string {
 	return path.Join(config.PathMnt, containerIdent)
 }
 
 // 获取容器挂载参数
-func getContainerMountParam(rwLayerPath, imagePath string) string {
-	return fmt.Sprintf("dirs=%s:%s", rwLayerPath, imagePath)
+func getContainerMountParam(containerName, imagePath string) string {
+	rwPath := getRwLayerPath(containerName)
+	workDirPath := getWorkDirPath(containerName)
+
+	return fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", imagePath, rwPath, workDirPath)
 }
 
 // endregion

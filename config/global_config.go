@@ -14,6 +14,7 @@ const (
 	PathMnt       = "/var/lib/mdocker/overlay2/mnt"
 	PathReadWrite = "/var/lib/mdocker/overlay2/rw"
 	PathImage     = "/var/lib/mdocker/overlay2/image"
+	PathWorkDir   = "/var/lib/mdocker/overlay2/workdir"
 
 	ProcessCloneFlags = syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS |
 		syscall.CLONE_NEWNET | syscall.CLONE_NEWIPC
